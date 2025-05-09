@@ -1,44 +1,17 @@
-import json
-import logging
-import os
 import re
 import unittest
-from dataclasses import dataclass
-from pathlib import Path
 
-import google.generativeai as genai
 import nltk
 import numpy as np
 import torch
-from dotenv import load_dotenv
 from nltk.tokenize import word_tokenize
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
-
-# Importar bibliotecas de métricas
 from rouge_score import rouge_scorer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from transformers import AutoModel, AutoTokenizer
 
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from utils import load_evaluation_data, logger
 
-# --- Configuração dos Testes ---
-BASE_DIR = Path(__file__).resolve().parent
-FIXTURES_DIR = BASE_DIR / 'fixtures' / 'summarization_data'
-
-# Carregar variáveis de ambiente
-load_dotenv()
-
-# Configurar Gemini
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY não encontrada nas variáveis de ambiente")
-
-genai.configure(api_key=GEMINI_API_KEY)
 
 class PortugueseTextProcessor:
     """Classe para processamento de texto em português."""
@@ -155,42 +128,6 @@ class PortugueseTextProcessor:
             Lista de tokens
         """
         return word_tokenize(self.preprocess_text(text), language='portuguese')
-
-@dataclass
-class EvaluationItem:
-    """Classe de dados para representar um item de avaliação."""
-    id: str
-    ai_summary: str
-    reference_summary: str
-    expected_keywords: list[str] | None = None
-    max_summary_length_words: int | None = None
-    min_summary_length_words: int | None = None
-
-def load_evaluation_data(filename: str = "evaluation_data.json") -> list[dict]:
-    """
-    Carrega dados de avaliação do arquivo JSON.
-    
-    Args:
-        filename: Nome do arquivo JSON contendo os dados de avaliação
-        
-    Returns:
-        Lista de dicionários contendo os dados de avaliação
-        
-    Raises:
-        FileNotFoundError: Se o arquivo de dados não for encontrado
-        json.JSONDecodeError: Se o arquivo JSON estiver mal formatado
-    """
-    file_path = FIXTURES_DIR / filename
-    if not file_path.exists():
-        raise FileNotFoundError(f"Arquivo de dados de avaliação não encontrado: {file_path}")
-
-    with file_path.open(encoding='utf-8') as f:
-        data = json.load(f)
-
-    if not isinstance(data, list):
-        raise TypeError("Os dados de avaliação devem ser uma lista de itens")
-
-    return data
 
 class TestSummaryEvaluation(unittest.TestCase):
     """Suite de testes para avaliação de resumos gerados por IA."""
@@ -375,206 +312,5 @@ class TestSummaryEvaluation(unittest.TestCase):
                     self.assertGreaterEqual(num_words, min_len,
                         f"AI summary too short for {item['id']}. Expected >= {min_len}, got {num_words}. Summary: '{ai_summary}'")
 
-class TestGeminiSummaryComparison(unittest.TestCase):
-    """Suite de testes para comparação de resumos usando o Gemini."""
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        """
-        Configura a classe de teste carregando dados e inicializando o modelo Gemini.
-        
-        Este método é chamado uma vez antes de todos os testes da classe.
-        """
-        logger.info("Configurando classe de teste Gemini")
-        cls.evaluation_data = load_evaluation_data()
-        cls.model = genai.GenerativeModel('gemini-2.0-flash')
-
-    def _get_gemini_comparison(self, summary1: str, summary2: str, feeling1: str, feeling2: str) -> dict[str, float]:
-        """
-        Obtém a comparação entre dois resumos usando o Gemini.
-        
-        Args:
-            summary1: Primeiro resumo para comparação
-            summary2: Segundo resumo para comparação
-            feeling1: Sentimento do primeiro resumo
-            feeling2: Sentimento do segundo resumo
-            
-        Returns:
-            Dicionário contendo a pontuação de similaridade e explicação
-        """
-        prompt = f"""
-        Analise os dois resumos abaixo e avalie o quão similares eles são em termos de:
-        1. Conteúdo principal
-        2. Informações-chave
-        3. Estrutura e organização
-        4. Tom e estilo
-        5. Sentimento geral (feeling)
-
-        Resumo 1: {summary1}
-        Sentimento 1: {feeling1}
-
-        Resumo 2: {summary2}
-        Sentimento 2: {feeling2}
-
-        IMPORTANTE: Responda APENAS com um JSON no seguinte formato, sem nenhum texto adicional:
-        {{"score": 0.XX, "explanation": "explicação detalhada"}}
-        """
-
-        try:
-            response = self.model.generate_content(prompt)
-            response_text = response.text.strip()
-            
-            # Tenta encontrar o JSON na resposta
-            try:
-                # Primeira tentativa: resposta direta
-                return json.loads(response_text)
-            except json.JSONDecodeError:
-                # Segunda tentativa: procurar JSON entre chaves
-                json_str = response_text[response_text.find("{"):response_text.rfind("}")+1]
-                if not json_str:
-                    raise ValueError("Nenhum JSON encontrado na resposta")
-                return json.loads(json_str)
-                
-        except Exception:
-            logger.exception("Erro ao obter comparação do Gemini")
-            return {"score": 0.0, "explanation": "Erro na comparação"}
-
-    def test_gemini_summary_similarity(self) -> None:
-        """Testa a similaridade entre resumos usando o Gemini."""
-        logger.info("Executando testes de similaridade com Gemini")
-
-        for item in self.evaluation_data:
-            ai_summary = item['ai_summary']
-            reference_summary = item['reference_summary']
-            ai_feeling = item.get('ai_feeling', '')
-            reference_feeling = item.get('reference_feeling', '')
-
-            with self.subTest(eval_id=item['id']):
-                logger.info(f"Avaliando item: {item['id']}")
-
-                # Validar entradas
-                self.assertTrue(ai_summary, f"Resumo da IA está vazio para {item['id']}")
-                self.assertTrue(reference_summary, f"Resumo de referência está vazio para {item['id']}")
-
-                # Obter comparação do Gemini
-                comparison = self._get_gemini_comparison(
-                    ai_summary, 
-                    reference_summary,
-                    ai_feeling,
-                    reference_feeling
-                )
-                logger.info(f"Comparação Gemini para {item['id']}: {comparison}")
-
-                # Verificar se a pontuação está acima do limiar
-                self.assertGreaterEqual(
-                    comparison['score'],
-                    0.6,
-                    f"Similaridade baixa para {item['id']} (Esperado >= 0.6, Obtido: {comparison['score']:.2f})\n"
-                    f"Explicação: {comparison['explanation']}"
-                )
-
-    def test_gemini_feeling_match(self) -> None:
-        """Testa se os sentimentos (feelings) dos resumos são compatíveis."""
-        logger.info("Executando testes de compatibilidade de sentimentos com Gemini")
-
-        for item in self.evaluation_data:
-            if 'ai_feeling' not in item or 'reference_feeling' not in item:
-                continue
-
-            ai_summary = item['ai_summary']
-            reference_summary = item['reference_summary']
-            ai_feeling = item['ai_feeling']
-            reference_feeling = item['reference_feeling']
-
-            with self.subTest(eval_id=item['id']):
-                logger.info(f"Avaliando sentimentos para item: {item['id']}")
-
-                prompt = f"""
-                Analise os dois resumos abaixo e seus respectivos sentimentos:
-
-                Resumo 1: {ai_summary}
-                Sentimento 1: {ai_feeling}
-
-                Resumo 2: {reference_summary}
-                Sentimento 2: {reference_feeling}
-
-                IMPORTANTE: Responda APENAS com um JSON no seguinte formato, sem nenhum texto adicional:
-                {{"compatible": true/false, "explanation": "explicação detalhada"}}
-                """
-
-                try:
-                    response = self.model.generate_content(prompt)
-                    response_text = response.text.strip()
-                    
-                    # Tenta encontrar o JSON na resposta
-                    try:
-                        # Primeira tentativa: resposta direta
-                        result = json.loads(response_text)
-                    except json.JSONDecodeError:
-                        # Segunda tentativa: procurar JSON entre chaves
-                        json_str = response_text[response_text.find("{"):response_text.rfind("}")+1]
-                        if not json_str:
-                            raise ValueError("Nenhum JSON encontrado na resposta")
-                        result = json.loads(json_str)
-
-                    self.assertTrue(
-                        result['compatible'],
-                        f"Sentimentos incompatíveis para {item['id']}\n"
-                        f"Explicação: {result['explanation']}"
-                    )
-                except Exception:
-                    logger.exception("Erro ao verificar compatibilidade de sentimentos com Gemini")
-                    self.fail(f"Falha ao verificar sentimentos para {item['id']}")
-
-    def test_gemini_keyword_presence(self) -> None:
-        """Testa se o Gemini identifica a presença de palavras-chave importantes."""
-        logger.info("Executando testes de presença de palavras-chave com Gemini")
-
-        for item in self.evaluation_data:
-            if "expected_keywords" not in item or not item["expected_keywords"]:
-                continue
-
-            ai_summary = item['ai_summary']
-            expected_keywords = item['expected_keywords']
-
-            with self.subTest(eval_id=item['id']):
-                logger.info(f"Avaliando item: {item['id']}")
-
-                prompt = f"""
-                Analise o resumo abaixo e verifique se ele contém as seguintes palavras-chave ou conceitos equivalentes:
-                {', '.join(expected_keywords)}
-                
-                Resumo: {ai_summary}
-                
-                IMPORTANTE: Responda APENAS com um JSON no seguinte formato, sem nenhum texto adicional:
-                {{"found": ["palavra1", "palavra2"], "missing": ["palavra3", "palavra4"]}}
-                """
-
-                try:
-                    response = self.model.generate_content(prompt)
-                    response_text = response.text.strip()
-                    
-                    # Tenta encontrar o JSON na resposta
-                    try:
-                        # Primeira tentativa: resposta direta
-                        result = json.loads(response_text)
-                    except json.JSONDecodeError:
-                        # Segunda tentativa: procurar JSON entre chaves
-                        json_str = response_text[response_text.find("{"):response_text.rfind("}")+1]
-                        if not json_str:
-                            raise ValueError("Nenhum JSON encontrado na resposta")
-                        result = json.loads(json_str)
-
-                    # Verificar se todas as palavras-chave foram encontradas
-                    self.assertEqual(
-                        len(result['missing']),
-                        0,
-                        f"Palavras-chave não encontradas no resumo para {item['id']}: {result['missing']}\n"
-                        f"Resumo: '{ai_summary}'"
-                    )
-                except Exception:
-                    logger.exception("Erro ao verificar palavras-chave com Gemini")
-                    self.fail(f"Falha ao verificar palavras-chave para {item['id']}")
-
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    unittest.main(verbosity=2) 
