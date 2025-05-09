@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Ambiente virtual
+venv/
+env/
+ENV/
+.env
+
+# IDEs e editores
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+*.sublime-workspace
+*.sublime-project
+
+# Logs
+*.log
+logs/
+log/
+
+# Arquivos de teste
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Arquivos de dados
+*.json
+fixtures/summarization_data/*
+!fixtures/summarization_data/.gitkeep
+!fixtures/summarization_data/template.json
+
+# Arquivos temporários
+*.tmp
+*.bak
+*.swp
+*~
+
+# Arquivos específicos do NLTK
+nltk_data/
+
+# Arquivos de cache
+.cache/
+.pytest_cache/
+.mypy_cache/
+
+# Arquivos de configuração local
+config.local.py
+settings.local.py
+
+# Arquivos de ambiente
+.env.local
+.env.*.local 
